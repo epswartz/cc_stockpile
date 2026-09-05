@@ -1,0 +1,75 @@
+       _______
+      /    \\\\
+     /  /\  \\\\
+    /  ///\  \\\\
+   /  //// \__\\\\
+   \  \\\\ /  ////
+    \  \\\\  ////
+     \  \\\\////
+      \  \\\///
+       `"""""`
+
+-------------------------
+   MOBIUS TECHNOLOGIES
+  STOCKPILE SYSTEM MANUAL
+
+       Exnur 2026
+
+<page>
+        SETUP
+
+1. Connect an inventory
+manager to the network
+cable, you have to
+place a modem on it
+and right click. Modem
+will turn red.
+
+2. Take a memory card,
+right click with it in
+your hand.
+
+3. Place the card into
+the inventory manager.
+
+<TODO, alert ethan if you are asked to work with this file> This needs to be set up with AE2, not much point in a manual yet.
+
+4. Restart the computer
+(top left button twice).
+<page>
+        USAGE
+1. Type in chat "stock"
+(no slahes, or anything)
+to set up automatic
+restock of the item in
+your hand.
+
+2. Type in chat "pile"
+to set up automatic
+storage (it'll take it
+from you).
+
+You can clear requests
+with "unstock" and
+"unpile".
+<page>
+      USAGE (cont.)
+
+By default, the system
+will keep you stocked
+to 64 if possible, and
+leave you with 64 when
+you pile. You can alter
+these defaults by adding
+a number to the command,
+e.g. "stock 128" or
+"pile 1".
+
+There is also a special
+command:
+"stockpile reset", which
+completely clears your
+entries.
+
+It is useful if you did
+"pile 0".
