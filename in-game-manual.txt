@@ -20,10 +20,7 @@
 
 1. Connect an inventory
 manager to the network
-cable, you have to
-place a modem on it
-and right click. Modem
-will turn red.
+cable.
 
 2. Take a memory card,
 right click with it in
@@ -32,10 +29,20 @@ your hand.
 3. Place the card into
 the inventory manager.
 
-<TODO, alert ethan if you are asked to work with this file> This needs to be set up with AE2, not much point in a manual yet.
-
 4. Restart the computer
 (top left button twice).
+<page>
+       SETUP (cont)
+
+5. Type stockpilecfg map
+<your name> <chest peripheral
+code> to set up your chest.
+
+
+
+
+
+     SEE USAGE NEXT PG.
 <page>
         USAGE
 1. Type in chat "stock"

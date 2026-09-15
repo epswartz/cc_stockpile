@@ -27,6 +27,35 @@ COMMANDS (Type in public chat):
 
 local requests_file = "stockpile_requests.json"
 
+local config_file = "stockpile_chests.json"
+
+-- Automatically create the config file if it doesn't exist on run
+if not fs.exists(config_file) then
+    local file = fs.open(config_file, "w")
+    if file then
+        file.write(textutils.serialiseJSON({}))
+        file.close()
+    end
+end
+
+-- Helper to load the current staging chest configurations
+local function load_chest_map()
+    if not fs.exists(config_file) then
+        return {}
+    end
+    local file = fs.open(config_file, "r")
+    if not file then
+        return {}
+    end
+    local content = file.readAll()
+    file.close()
+    local success, result = pcall(textutils.unserialiseJSON, content)
+    if success and type(result) == "table" then
+        return result
+    end
+    return {}
+end
+
 -- Helper function to log messages with timestamps
 local function log(level, message)
     local time_str = textutils.formatTime(os.time(), true)
@@ -74,6 +103,11 @@ end
 -- Find the Chat Box peripheral (supporting different naming across versions)
 local function find_chat_box()
     return peripheral.find("chatBox") or peripheral.find("chat_box")
+end
+
+-- Find the ME Bridge peripheral if present on the network
+local function find_me_bridge()
+    return peripheral.find("me_bridge") or peripheral.find("meBridge") or peripheral.find("me_interface")
 end
 
 -- Find all connected Inventory Managers (supporting different naming across versions)
@@ -493,21 +527,45 @@ local function update_monitor()
     
     -- Group requests by player
     local grouped = {}
+    local sorted_players = {}
     for _, req in ipairs(requests) do
         if not grouped[req.player] then
             grouped[req.player] = {}
+            table.insert(sorted_players, req.player)
         end
         table.insert(grouped[req.player], req)
     end
     
+    table.sort(sorted_players)
+    
     local current_line = 3
-    for player, reqs in pairs(grouped) do
+    for _, player in ipairs(sorted_players) do
+        local reqs = grouped[player]
         if current_line >= h then break end
         
         -- Draw Player Name
         mon.setTextColor(player_color)
         mon.setCursorPos(1, current_line)
         mon.write(player)
+        
+        -- Check for and display any configuration/hardware errors in red
+        local PLAYER_CHEST_MAP = load_chest_map()
+        local has_chest = PLAYER_CHEST_MAP[player] ~= nil
+        local has_card = find_manager_for_player(player) ~= nil
+        
+        local errs = {}
+        if not has_chest then
+            table.insert(errs, "(NO CHEST)")
+        end
+        if not has_card then
+            table.insert(errs, "(NO CARD)")
+        end
+        
+        if #errs > 0 then
+            mon.setTextColor(colors.red)
+            mon.write(" " .. table.concat(errs, " "))
+        end
+        
         current_line = current_line + 1
         
         for _, req in ipairs(reqs) do
@@ -584,132 +642,172 @@ local function restock_loop()
                 end
             end
             
+            local me = find_me_bridge()
+            local PLAYER_CHEST_MAP = load_chest_map()
             for player, _ in pairs(unique_players) do
-                local manager = find_manager_for_player(player)
-                if not manager then
-                    log("ERROR", "No Inventory Manager found with a memory card for player: " .. player)
+                local target_chest = PLAYER_CHEST_MAP[player]
+                if not target_chest then
+                    log("WARN", "Skipping player " .. player .. ": No staging chest configured in PLAYER_CHEST_MAP")
                 else
-                    -- Get the player's current items
-                    local success, player_items = pcall(manager.getItems)
-                    if not success or not player_items then
-                        log("ERROR", "Failed to read inventory for player: " .. player)
+                    local manager = find_manager_for_player(player)
+                    if not manager then
+                        log("ERROR", "No Inventory Manager found with a memory card for player: " .. player)
                     else
-                        -- Count current items for each request
-                        local current_counts = {}
-                        local stock_reqs = player_stock_requests[player] or {}
-                        local depletion_reqs = player_pile_requests[player] or {}
-                        
-                        for _, req in ipairs(stock_reqs) do
-                            current_counts[req.item_name] = 0
-                        end
-                        for _, req in ipairs(depletion_reqs) do
-                            current_counts[req.item_name] = 0
-                        end
-                        
-                        for _, item in pairs(player_items) do
-                            if current_counts[item.name] then
-                                current_counts[item.name] = current_counts[item.name] + item.count
+                        -- Get the player's current items
+                        local success, player_items = pcall(manager.getItems)
+                        if not success or not player_items then
+                            log("ERROR", "Failed to read inventory for player: " .. player)
+                        else
+                            -- Count current items for each request
+                            local current_counts = {}
+                            local stock_reqs = player_stock_requests[player] or {}
+                            local depletion_reqs = player_pile_requests[player] or {}
+                            
+                            for _, req in ipairs(stock_reqs) do
+                                current_counts[req.item_name] = 0
                             end
-                        end
-                        
-                        -- Process Stockpile / Restocking requests
-                        for _, req in ipairs(stock_reqs) do
-                            local needed = req.target_count - current_counts[req.item_name]
-                            if needed > 0 then
-                                -- Find if the player already has this item in a slot (so we can restock into the same slot)
-                                -- ONLY target the slot if it is NOT completely full yet.
-                                local target_slot = nil
-                                for _, item in pairs(player_items) do
-                                    if item.name == req.item_name then
-                                        if item.count < (item.maxStackSize or 64) then
-                                            target_slot = item.slot
+                            for _, req in ipairs(depletion_reqs) do
+                                current_counts[req.item_name] = 0
+                            end
+                            
+                            for _, item in pairs(player_items) do
+                                if current_counts[item.name] then
+                                    current_counts[item.name] = current_counts[item.name] + item.count
+                                end
+                            end
+                            
+                            -- Process Stockpile / Restocking requests
+                            for _, req in ipairs(stock_reqs) do
+                                local needed = req.target_count - current_counts[req.item_name]
+                                if needed > 0 then
+                                    -- Find if the player already has this item in a slot (so we can restock into the same slot)
+                                    -- ONLY target the slot if it is NOT completely full yet.
+                                    local target_slot = nil
+                                    for _, item in pairs(player_items) do
+                                        if item.name == req.item_name then
+                                            if item.count < (item.maxStackSize or 64) then
+                                                target_slot = item.slot
+                                                break
+                                            end
+                                        end
+                                    end
+                                    
+                                    -- Export the needed count from the ME system into the player's staging chest
+                                    local success_exp, exported = pcall(me.exportItem, { name = req.item_name, count = needed }, target_chest)
+                                    if not success_exp then
+                                        log("ERROR", "Failed to export " .. req.display_name .. " to " .. target_chest .. ": " .. tostring(exported))
+                                    elseif not exported or exported == 0 then
+                                        log("WARN", "ME network out of stock for " .. req.display_name .. " (needed " .. needed .. ")")
+                                    else
+                                        log("INFO", "ME Bridge exported " .. exported .. "x " .. req.display_name .. " to " .. target_chest)
+                                    end
+                                    
+                                    -- Prepare the transfer payload
+                                    local transfer_payload = { name = req.item_name, count = needed }
+                                    if target_slot then
+                                        transfer_payload.toSlot = target_slot
+                                    end
+                                    
+                                    -- Add item to player from the staging chest on top of the Inventory Manager
+                                    local success_add, added = pcall(manager.addItemToPlayer, "up", transfer_payload)
+                                    if not success_add then
+                                        log("ERROR", "Failed to add item to " .. player .. ": " .. tostring(added))
+                                    elseif added and added > 0 then
+                                        log("INFO", "Restocked " .. added .. "x " .. req.display_name .. " to player " .. player .. (target_slot and (" (into slot " .. target_slot .. ")") or ""))
+                                    else
+                                        log("WARN", "Tried to restock " .. needed .. "x " .. req.display_name .. " to player " .. player .. ", but added 0 (supply empty or inventory full)")
+                                    end
+                                    
+                                    -- Clean up/sweep leftovers back to ME Bridge from player's staging chest
+                                    local success_imp, imported = pcall(me.importItem, target_chest)
+                                    if success_imp and imported and imported > 0 then
+                                        log("INFO", "Returned " .. imported .. "x " .. req.display_name .. " from " .. target_chest .. " back to ME network")
+                                    end
+                                end
+                            end
+                            
+                            -- Process Pile / Depletion requests
+                            for _, req in ipairs(depletion_reqs) do
+                                local current_qty = current_counts[req.item_name]
+                                local excess = current_qty - req.target_count
+                                if excess > 0 then
+                                    -- Gather all slots containing this item
+                                    local other_slots = {}
+                                    local hotbar_slots = {}
+                                    
+                                    for _, item in pairs(player_items) do
+                                        if item.name == req.item_name then
+                                            -- Determine if hotbar (1-9) or other (>= 10)
+                                            local is_hotbar = (item.slot >= 1 and item.slot <= 9)
+                                            if is_hotbar then
+                                                table.insert(hotbar_slots, item)
+                                            else
+                                                table.insert(other_slots, item)
+                                            end
+                                        end
+                                    end
+                                    
+                                    -- Try other_slots first, then hotbar_slots
+                                    local targets = {}
+                                    for _, item in ipairs(other_slots) do
+                                        table.insert(targets, item)
+                                    end
+                                    for _, item in ipairs(hotbar_slots) do
+                                        table.insert(targets, item)
+                                    end
+                                    
+                                    local total_removed = 0
+                                    local remaining_excess = excess
+                                    
+                                    for _, item in ipairs(targets) do
+                                        if remaining_excess <= 0 then
+                                            break
+                                        end
+                                        
+                                        local take = math.min(remaining_excess, item.count)
+                                        local success_rem, removed = pcall(manager.removeItemFromPlayer, "up", {
+                                            name = req.item_name,
+                                            fromSlot = item.slot,
+                                            count = take
+                                        })
+                                        
+                                        if not success_rem then
+                                            log("ERROR", "Failed to remove item from slot " .. item.slot .. " for player " .. player .. ": " .. tostring(removed))
+                                            break
+                                        elseif removed and removed > 0 then
+                                            total_removed = total_removed + removed
+                                            remaining_excess = remaining_excess - removed
+                                        else
                                             break
                                         end
                                     end
-                                end
-                                
-                                -- Prepare the transfer payload
-                                local transfer_payload = { name = req.item_name, count = needed }
-                                if target_slot then
-                                    transfer_payload.toSlot = target_slot
-                                end
-                                
-                                -- Add item to player from the supply chest on top of the Inventory Manager
-                                local success_add, added = pcall(manager.addItemToPlayer, "up", transfer_payload)
-                                if not success_add then
-                                    log("ERROR", "Failed to add item to " .. player .. ": " .. tostring(added))
-                                elseif added and added > 0 then
-                                    log("INFO", "Restocked " .. added .. "x " .. req.display_name .. " to player " .. player .. (target_slot and (" (into slot " .. target_slot .. ")") or ""))
-                                else
-                                    log("WARN", "Tried to restock " .. needed .. "x " .. req.display_name .. " to player " .. player .. ", but added 0 (supply empty or inventory full)")
-                                end
-                            end
-                        end
-                        
-                        -- Process Pile / Depletion requests
-                        for _, req in ipairs(depletion_reqs) do
-                            local current_qty = current_counts[req.item_name]
-                            local excess = current_qty - req.target_count
-                            if excess > 0 then
-                                -- Gather all slots containing this item
-                                local other_slots = {}
-                                local hotbar_slots = {}
-                                
-                                for _, item in pairs(player_items) do
-                                    if item.name == req.item_name then
-                                        -- Determine if hotbar (1-9) or other (>= 10)
-                                        local is_hotbar = (item.slot >= 1 and item.slot <= 9)
-                                        if is_hotbar then
-                                            table.insert(hotbar_slots, item)
-                                        else
-                                            table.insert(other_slots, item)
+                                    
+                                    if total_removed > 0 then
+                                        log("INFO", "Depleted " .. total_removed .. "x " .. req.display_name .. " from player " .. player)
+                                        
+                                        -- Import the depleted items from player's staging chest back into ME system
+                                        local success_imp, imported = pcall(me.importItem, target_chest)
+                                        if not success_imp then
+                                            log("ERROR", "Failed to import depleted items back into ME from " .. target_chest .. ": " .. tostring(imported))
+                                        elseif imported and imported > 0 then
+                                            log("INFO", "Imported " .. imported .. "x " .. req.display_name .. " back into ME network")
                                         end
-                                    end
-                                end
-                                
-                                -- Try other_slots first, then hotbar_slots
-                                local targets = {}
-                                for _, item in ipairs(other_slots) do
-                                    table.insert(targets, item)
-                                end
-                                for _, item in ipairs(hotbar_slots) do
-                                    table.insert(targets, item)
-                                end
-                                
-                                local total_removed = 0
-                                local remaining_excess = excess
-                                
-                                for _, item in ipairs(targets) do
-                                    if remaining_excess <= 0 then
-                                        break
-                                    end
-                                    
-                                    local take = math.min(remaining_excess, item.count)
-                                    local success_rem, removed = pcall(manager.removeItemFromPlayer, "up", {
-                                        name = req.item_name,
-                                        fromSlot = item.slot,
-                                        count = take
-                                    })
-                                    
-                                    if not success_rem then
-                                        log("ERROR", "Failed to remove item from slot " .. item.slot .. " for player " .. player .. ": " .. tostring(removed))
-                                        break
-                                    elseif removed and removed > 0 then
-                                        total_removed = total_removed + removed
-                                        remaining_excess = remaining_excess - removed
                                     else
-                                        -- Chest might be full
-                                        break
+                                        log("WARN", "Tried to deplete " .. excess .. "x " .. req.display_name .. " from player " .. player .. ", but removed 0 (chest full?)")
                                     end
-                                end
-                                
-                                if total_removed > 0 then
-                                    log("INFO", "Depleted " .. total_removed .. "x " .. req.display_name .. " from player " .. player)
-                                else
-                                    log("WARN", "Tried to deplete " .. excess .. "x " .. req.display_name .. " from player " .. player .. ", but removed 0 (chest full?)")
                                 end
                             end
                         end
+                    end
+                end
+            end
+            
+            -- Global Sweep: Clear all configured staging chests back into AE2 storage at the end of each cycle
+            if me then
+                for player, chest_peripheral in pairs(PLAYER_CHEST_MAP) do
+                    local success_imp, imported = pcall(me.importItem, chest_peripheral)
+                    if success_imp and imported and imported > 0 then
+                        log("INFO", "Global Sweep: Returned " .. imported .. "x items from " .. player .. "'s chest (" .. chest_peripheral .. ") back to ME network")
                     end
                 end
             end
@@ -724,17 +822,16 @@ end
 -- Check that necessary peripherals exist on startup
 local cb = find_chat_box()
 local managers = find_all_managers()
+local me = find_me_bridge()
 
-if not cb or #managers == 0 then
+if not cb or #managers == 0 or not me then
     local err_msg = "Stockpile initialization failed: "
-    if not cb and #managers == 0 then
-        err_msg = err_msg .. "Missing Chat Box AND Inventory Manager!"
-    elseif not cb then
-        err_msg = err_msg .. "Missing Chat Box peripheral!"
-    else
-        err_msg = err_msg .. "Missing Inventory Manager peripheral!"
-    end
+    local errors = {}
+    if not cb then table.insert(errors, "Missing Chat Box") end
+    if #managers == 0 then table.insert(errors, "Missing Inventory Manager") end
+    if not me then table.insert(errors, "Missing ME Bridge") end
     
+    err_msg = err_msg .. table.concat(errors, ", ") .. "!"
     log("CRITICAL", err_msg)
     
     -- If chat box is available, notify game chat before crashing
