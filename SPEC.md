@@ -38,35 +38,36 @@ Stockpile listens to the public in-game chat using the Chat Box peripheral. Comm
    * **Behavior**: Marks the item currently held in the player's main hand for restocking.
    * **Count**: If specified, stocks up to that number. If omitted, defaults to the item's maximum stack size (typically 64).
    * **Persistence**: Writes the request immediately to `stockpile_requests.json` with `"type": "stock"`.
-   * **Feedback**: Notifies the player in chat when their stock request is registered or updated.
+   * **Feedback**: Sends a toast notification (`sendToastToPlayer`) to the player when their stock request is registered or updated.
 
 2. `unstock`
    * **Behavior**: Deletes the restocking entry (`"type": "stock"`) for the item currently held in the player's main hand.
    * **Persistence**: Removes the matching request from `stockpile_requests.json` immediately.
-   * **Feedback**: Notifies the player in chat upon successful removal.
+   * **Feedback**: Sends a toast notification (`sendToastToPlayer`) to the player upon successful removal.
 
 3. `pile [optional preserve_count]`
    * **Behavior**: Marks the item currently held in the player's main hand for automatic inventory depletion (items are pulled from the player's inventory and placed into the supply/disposal chest).
    * **Preserve Count**: If specified, the system will pull all excess items of this type from the player's inventory, leaving exactly `preserve_count` items behind. If omitted, it defaults to leaving exactly `64` items (one full stack).
    * **Persistence**: Writes the depletion request immediately to `stockpile_requests.json` with `"type": "pile"`.
-   * **Feedback**: Notifies the player in chat when their depletion request is registered or updated.
+   * **Feedback**: Sends a toast notification (`sendToastToPlayer`) to the player when their depletion request is registered or updated.
 
 4. `unpile`
    * **Behavior**: Deletes the depletion entry (`"type": "pile"`) for the item currently held in the player's main hand.
    * **Persistence**: Removes the matching request from `stockpile_requests.json` immediately.
-   * **Feedback**: Notifies the player in chat upon successful removal.
+   * **Feedback**: Sends a toast notification (`sendToastToPlayer`) to the player upon successful removal.
 
 5. `stockpile reset`
    * **Behavior**: Wipes all registered requests (`stock` and `pile` types) for the executing player.
    * **Persistence**: Deletes all entries with `player == <username>` from `stockpile_requests.json`.
-   * **Feedback**: Sends a private message to the player confirming how many entries were successfully wiped.
+   * **Feedback**: Sends a toast notification (`sendToastToPlayer`) to the player confirming how many entries were successfully wiped.
 
 > [!IMPORTANT]
-> **Stock & Pile Mutual Exclusion Rule**
-> To prevent logical item loops (such as trying to restock and deplete the same item on the same player), players are strictly prohibited from having both a `stock` and a `pile` entry for the same item at the same time:
-> * If a player has an active `pile` entry and tries to `stock` that item, the system rejects it and broadcasts to the entire server: `"<player> is trying to stock and pile <item> at the same time, but you can't do that, they need to unpile <item> first. DINGUS DETECTED!"`
-> * If a player has an active `stock` entry and tries to `pile` that item, the system rejects it and broadcasts to the entire server: `"<player> is trying to stock and pile <item> at the same time, but you can't do that, they need to unstock <item> first. DINGUS DETECTED!"`
-> * To switch modes, a player must first `unstock` or `unpile` the held item.
+> **Stock & Pile Mutual Exclusion Rule (with "Keep at Exactly X" Exception)**
+> To prevent logical item loops, players are prohibited from having both a `stock` and a `pile` entry for the same item at the same time, unless both entries target the **exact same quantity** (e.g. to keep the inventory at exactly X):
+> * If a player has an active `pile` entry with a different quantity and tries to `stock` that item, the system rejects it and broadcasts to the entire server: `"<player> is trying to stock and pile <item> at different quantities (<stock_count> vs <pile_count>), but you can't do that, they must be the same quantity to keep at exactly <stock_count>. DINGUS DETECTED!"`
+> * If a player has an active `stock` entry with a different quantity and tries to `pile` that item, the system rejects it and broadcasts to the entire server: `"<player> is trying to stock and pile <item> at different quantities (<stock_count> vs <pile_count>), but you can't do that, they must be the same quantity to keep at exactly <pile_count>. DINGUS DETECTED!"`
+> * If the quantities are the same, both requests are registered and co-exist to keep the player's inventory at exactly that target quantity.
+> * To switch/change a single mode to a different quantity, a player must first `unstock` or `unpile` the held item or ensure both commands specify matching quantities.
 
 ---
 
@@ -91,7 +92,9 @@ The periodic background thread handles `pile` requests concurrently alongside re
 2. **Scan and Calculate Excess**: Checks each player's inventory to see if they possess more than the specified `target_count` of the marked item.
 3. **Deplete (Pull)**:
    * Calculate the excess count (`excess = current_count - target_count`).
-   * If `excess > 0`, use the Inventory Manager's `removeItemFromPlayer` to pull items from the player's inventory and transfer them into the chest on the `"up"` side.
+   * If `excess > 0`, prioritize pulling items from slots **outside the player's hotbar** (non-hotbar slots, e.g. slot >= 10).
+   * Only pull from the player's hotbar slots (slots 1 to 9) if there are no other slots containing the item or if further depletion is still required to satisfy the `target_count`.
+   * Use the Inventory Manager's `removeItemFromPlayer` with `fromSlot` to pull items from specific slots and transfer them into the chest on the `"up"` side.
    * Gracefully handles error cases where the supply/disposal chest is completely full.
 
 ---

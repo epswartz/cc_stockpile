@@ -149,29 +149,35 @@ local function chat_loop()
                 end
                 
                 local requests = load_requests()
-                local found = false
+                local existing_stock = nil
+                local existing_pile = nil
+                for _, req in ipairs(requests) do
+                    if req.player == username and req.item_name == item.name then
+                        local rtype = req.type or "stock"
+                        if rtype == "stock" then
+                            existing_stock = req
+                        elseif rtype == "pile" then
+                            existing_pile = req
+                        end
+                    end
+                end
+                
                 local target_count = count or item.maxStackSize or 64
                 local display_name = item.displayName or item.name
                 
-                for _, req in ipairs(requests) do
-                    if req.player == username and req.item_name == item.name then
-                        local req_type = req.type or "stock"
-                        if req_type == "pile" then
-                            log("WARN", username .. " tried to stock " .. display_name .. " but it is already marked for piling.")
-                            local cb = find_chat_box()
-                            if cb then
-                                pcall(cb.sendMessage, username .. " is trying to stock and pile " .. display_name .. " at the same time, but you can't do that, they need to unpile " .. display_name .. " first. DINGUS DETECTED!", "Stockpile")
-                            end
-                            return
-                        end
-                        req.target_count = target_count
-                        req.display_name = display_name
-                        req.type = "stock"
-                        found = true
-                        break
+                if existing_pile and existing_pile.target_count ~= target_count then
+                    log("WARN", username .. " tried to stock " .. display_name .. " at " .. target_count .. " but it is piled at " .. existing_pile.target_count)
+                    local cb = find_chat_box()
+                    if cb then
+                        pcall(cb.sendMessage, username .. " is trying to stock and pile " .. display_name .. " at different quantities (" .. target_count .. " vs " .. existing_pile.target_count .. "), but you can't do that, they must be the same quantity to keep at exactly " .. target_count .. ". DINGUS DETECTED!", "Stockpile")
                     end
+                    return
                 end
-                if not found then
+                
+                if existing_stock then
+                    existing_stock.target_count = target_count
+                    existing_stock.display_name = display_name
+                else
                     table.insert(requests, {
                         player = username,
                         item_name = item.name,
@@ -187,7 +193,7 @@ local function chat_loop()
                 -- Send player notification if possible
                 local cb = find_chat_box()
                 if cb then
-                    pcall(cb.sendMessageToPlayer, "Stocked " .. display_name .. " up to " .. target_count, username, "Stockpile")
+                    pcall(cb.sendToastToPlayer, "Stocked " .. display_name .. " up to " .. target_count, "Stockpile", username, "Stockpile")
                 end
                 
             elseif cmd == "unstock" then
@@ -236,13 +242,13 @@ local function chat_loop()
                     log("INFO", "Removed request: " .. username .. " -> " .. display_name)
                     local cb = find_chat_box()
                     if cb then
-                        pcall(cb.sendMessageToPlayer, "Unstocked " .. display_name, username, "Stockpile")
+                        pcall(cb.sendToastToPlayer, "Unstocked " .. display_name, "Stockpile", username, "Stockpile")
                     end
                 else
                     log("WARN", "No stockpile entry found for " .. username .. "'s held item: " .. display_name)
                     local cb = find_chat_box()
                     if cb then
-                        pcall(cb.sendMessageToPlayer, "No stockpile entry found for your held item (" .. display_name .. ")", username, "Stockpile")
+                        pcall(cb.sendToastToPlayer, "No stockpile entry found for your held item (" .. display_name .. ")", "Stockpile", username, "Stockpile")
                     end
                 end
                 
@@ -283,29 +289,35 @@ local function chat_loop()
                 end
                 
                 local requests = load_requests()
-                local found = false
+                local existing_stock = nil
+                local existing_pile = nil
+                for _, req in ipairs(requests) do
+                    if req.player == username and req.item_name == item.name then
+                        local rtype = req.type or "stock"
+                        if rtype == "stock" then
+                            existing_stock = req
+                        elseif rtype == "pile" then
+                            existing_pile = req
+                        end
+                    end
+                end
+                
                 local target_count = count or 64
                 local display_name = item.displayName or item.name
                 
-                for _, req in ipairs(requests) do
-                    if req.player == username and req.item_name == item.name then
-                        local req_type = req.type or "stock"
-                        if req_type == "stock" then
-                            log("WARN", username .. " tried to pile " .. display_name .. " but it is already marked for stocking.")
-                            local cb = find_chat_box()
-                            if cb then
-                                pcall(cb.sendMessage, username .. " is trying to stock and pile " .. display_name .. " at the same time, but you can't do that, they need to unstock " .. display_name .. " first. DINGUS DETECTED!", "Stockpile")
-                            end
-                            return
-                        end
-                        req.target_count = target_count
-                        req.display_name = display_name
-                        req.type = "pile"
-                        found = true
-                        break
+                if existing_stock and existing_stock.target_count ~= target_count then
+                    log("WARN", username .. " tried to pile " .. display_name .. " leaving " .. target_count .. " but it is stocked at " .. existing_stock.target_count)
+                    local cb = find_chat_box()
+                    if cb then
+                        pcall(cb.sendMessage, username .. " is trying to stock and pile " .. display_name .. " at different quantities (" .. existing_stock.target_count .. " vs " .. target_count .. "), but you can't do that, they must be the same quantity to keep at exactly " .. target_count .. ". DINGUS DETECTED!", "Stockpile")
                     end
+                    return
                 end
-                if not found then
+                
+                if existing_pile then
+                    existing_pile.target_count = target_count
+                    existing_pile.display_name = display_name
+                else
                     table.insert(requests, {
                         player = username,
                         item_name = item.name,
@@ -321,7 +333,7 @@ local function chat_loop()
                 -- Send player notification if possible
                 local cb = find_chat_box()
                 if cb then
-                    pcall(cb.sendMessageToPlayer, "Piled " .. display_name .. " down to " .. target_count, username, "Stockpile")
+                    pcall(cb.sendToastToPlayer, "Piled " .. display_name .. " down to " .. target_count, "Stockpile", username, "Stockpile")
                 end
                 
             elseif cmd == "unpile" then
@@ -369,13 +381,13 @@ local function chat_loop()
                     log("INFO", "Removed pile request: " .. username .. " -> " .. display_name)
                     local cb = find_chat_box()
                     if cb then
-                        pcall(cb.sendMessageToPlayer, "Unpiled " .. display_name, username, "Stockpile")
+                        pcall(cb.sendToastToPlayer, "Unpiled " .. display_name, "Stockpile", username, "Stockpile")
                     end
                 else
                     log("WARN", "No pile entry found for " .. username .. "'s held item: " .. display_name)
                     local cb = find_chat_box()
                     if cb then
-                        pcall(cb.sendMessageToPlayer, "No pile entry found for your held item (" .. display_name .. ")", username, "Stockpile")
+                        pcall(cb.sendToastToPlayer, "No pile entry found for your held item (" .. display_name .. ")", "Stockpile", username, "Stockpile")
                     end
                 end
                 
@@ -403,13 +415,13 @@ local function chat_loop()
                         log("INFO", "Reset all " .. removed_count .. " stockpile/pile entries for player: " .. username)
                         local cb = find_chat_box()
                         if cb then
-                            pcall(cb.sendMessageToPlayer, "Wiped all (" .. removed_count .. ") of your stockpile and pile requests.", username, "Stockpile")
+                            pcall(cb.sendToastToPlayer, "Wiped all (" .. removed_count .. ") of your stockpile and pile requests.", "Stockpile", username, "Stockpile")
                         end
                     else
                         log("WARN", "Player " .. username .. " requested reset but had no active entries.")
                         local cb = find_chat_box()
                         if cb then
-                            pcall(cb.sendMessageToPlayer, "You don't have any active stockpile or pile requests to reset.", username, "Stockpile")
+                            pcall(cb.sendToastToPlayer, "You don't have any active stockpile or pile requests to reset.", "Stockpile", username, "Stockpile")
                         end
                     end
                 end
@@ -639,12 +651,60 @@ local function restock_loop()
                             local current_qty = current_counts[req.item_name]
                             local excess = current_qty - req.target_count
                             if excess > 0 then
-                                -- Remove excess items from player and place in the supply/disposal chest on top of the Inventory Manager
-                                local success_rem, removed = pcall(manager.removeItemFromPlayer, "up", { name = req.item_name, count = excess })
-                                if not success_rem then
-                                    log("ERROR", "Failed to remove item from " .. player .. ": " .. tostring(removed))
-                                elseif removed and removed > 0 then
-                                    log("INFO", "Depleted " .. removed .. "x " .. req.display_name .. " from player " .. player)
+                                -- Gather all slots containing this item
+                                local other_slots = {}
+                                local hotbar_slots = {}
+                                
+                                for _, item in pairs(player_items) do
+                                    if item.name == req.item_name then
+                                        -- Determine if hotbar (1-9) or other (>= 10)
+                                        local is_hotbar = (item.slot >= 1 and item.slot <= 9)
+                                        if is_hotbar then
+                                            table.insert(hotbar_slots, item)
+                                        else
+                                            table.insert(other_slots, item)
+                                        end
+                                    end
+                                end
+                                
+                                -- Try other_slots first, then hotbar_slots
+                                local targets = {}
+                                for _, item in ipairs(other_slots) do
+                                    table.insert(targets, item)
+                                end
+                                for _, item in ipairs(hotbar_slots) do
+                                    table.insert(targets, item)
+                                end
+                                
+                                local total_removed = 0
+                                local remaining_excess = excess
+                                
+                                for _, item in ipairs(targets) do
+                                    if remaining_excess <= 0 then
+                                        break
+                                    end
+                                    
+                                    local take = math.min(remaining_excess, item.count)
+                                    local success_rem, removed = pcall(manager.removeItemFromPlayer, "up", {
+                                        name = req.item_name,
+                                        fromSlot = item.slot,
+                                        count = take
+                                    })
+                                    
+                                    if not success_rem then
+                                        log("ERROR", "Failed to remove item from slot " .. item.slot .. " for player " .. player .. ": " .. tostring(removed))
+                                        break
+                                    elseif removed and removed > 0 then
+                                        total_removed = total_removed + removed
+                                        remaining_excess = remaining_excess - removed
+                                    else
+                                        -- Chest might be full
+                                        break
+                                    end
+                                end
+                                
+                                if total_removed > 0 then
+                                    log("INFO", "Depleted " .. total_removed .. "x " .. req.display_name .. " from player " .. player)
                                 else
                                     log("WARN", "Tried to deplete " .. excess .. "x " .. req.display_name .. " from player " .. player .. ", but removed 0 (chest full?)")
                                 end
